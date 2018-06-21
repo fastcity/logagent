@@ -5,9 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-
 	"os"
-
 	"time"
 
 	"github.com/Shopify/sarama"
@@ -27,9 +25,6 @@ type CollectionConfig struct {
 //MyConfig 配置的结构体
 type MyConfig struct {
 	kafkaAddr      string
-	Path           string //写日志的路径
-	LogLevel       string
-	CollectInfo    []CollectionConfig
 	etcdAddr       string
 	etcdkeycollect string
 }
@@ -41,13 +36,11 @@ var (
 	CollentMap map[string]string
 	//AppConfig 全局配置
 	AppConfig MyConfig
+	//CollectInfo 需要收集日志的信息
+	CollectInfo []CollectionConfig
 )
 
 func main() {
-	defer func(appConfig *MyConfig) {
-		logs.Debug("获取的配置信息：%v", appConfig)
-	}(&AppConfig)
-
 	currentpath, err := os.Getwd()
 	Currentpath = currentpath + `\logagent\logagent.ini`
 	//先初始化系统日志配置
@@ -56,26 +49,25 @@ func main() {
 	AppConfig, err = loadConfig("ini", Currentpath)
 
 	if err != nil {
-		fmt.Println("loadconfig err", err)
+		logs.Error("loadconfig err", err)
 	} else {
 		//根据配置文件读取etcd的配置
 		endpointsetcd := []string{AppConfig.etcdAddr}
 
 		CollentMap, err = initetcd(endpointsetcd, AppConfig.etcdkeycollect)
-		logs.Debug("CollentMap :%V", CollentMap)
 
 		//打印etcd获取的信息
-
-		err = json.Unmarshal([]byte(CollentMap[AppConfig.etcdkeycollect]), &AppConfig.CollectInfo)
+		err = json.Unmarshal([]byte(CollentMap[AppConfig.etcdkeycollect]), &CollectInfo)
 		if err != nil {
 			logs.Error("json Unmarshal etcdkeycollect err:%v", err)
 		}
 
+		logs.Debug("获取的配置信息：%v", AppConfig)
 		go watchetcdkey(endpointsetcd, AppConfig.etcdkeycollect)
 		//根据etcd读取配置文件 开始跟踪日志
 		endpoints := []string{AppConfig.kafkaAddr}
 		lines := make(chan *tail.Line)
-		for _, p := range AppConfig.CollectInfo {
+		for _, p := range CollectInfo {
 			go readLog(lines, p.Path)
 			// 读取出来，放到kafka上即可
 			go sendMsg(lines, p.Topic, endpoints)
@@ -90,17 +82,17 @@ func main() {
 //LoadConfig 加载配置文件
 func loadConfig(configType, path string) (myConfig MyConfig, err error) {
 	defer func(myConfig *MyConfig) {
-		fmt.Println("read kafka   addr=: ", myConfig.kafkaAddr)
-		fmt.Println("read etcdaddr=: ", myConfig.etcdAddr)
-		fmt.Println("read etcdkeycollect=: ", myConfig.etcdkeycollect)
+		logs.Debug("read kafka   addr=: ", myConfig.kafkaAddr)
+		logs.Debug("read etcdaddr=: ", myConfig.etcdAddr)
+		logs.Debug("read etcdkeycollect=: ", myConfig.etcdkeycollect)
 	}(&myConfig)
 
 	conf, err := config.NewConfig(configType, path)
 	if err != nil {
-		fmt.Println("new config failed, err:", err)
+		logs.Error("new config failed, err:", err)
 	}
 
-	fmt.Println("读取配置得路径是：", path)
+	logs.Debug("读取配置得路径是：", path)
 	myConfig.kafkaAddr = conf.String("kafka::addr")
 	if len(myConfig.kafkaAddr) == 0 {
 		myConfig.kafkaAddr = "127.0.0.1:9092"
@@ -121,33 +113,37 @@ func loadConfig(configType, path string) (myConfig MyConfig, err error) {
 	return
 }
 
-///初始化日志
+///初始化系统日志信息
 func initAppLog(path string) (err error) {
-	config := make(map[string]interface{})
-	logpath := path + `\logagent\Logs`
-	//没有则创建
-	err = os.MkdirAll(logpath, os.ModeDir)
-	if err != nil {
-		config["filename"] = `longagent.log`
-	} else {
-		config["filename"] = path + `\logagent\Logs\longagent.log`
-	}
-	//设置不同级别的分开写
-	config["separate"] = []string{"error", "info", "debug"}
+	// config := make(map[string]interface{})
+	// logpath := path + `\logagent\Logs`
+	// //没有则创建
+	// err = os.MkdirAll(logpath, os.ModeDir)
+	// if err != nil {
+	// 	config["filename"] = `longagent.log`
+	// } else {
+	// 	config["filename"] = path + `\logagent\Logs\longagent.log`
+	// }
+	// //设置不同级别的分开写
+	// config["separate"] = []string{"error", "info", "debug"}
 
-	//输出调用的文件名和文件行号 默认是false
-	logs.EnableFuncCallDepth(true)
-	//异步输出 设置缓冲chan 为2
-	logs.Async(3)
-	//多文件 debug  error  等分开写
+	// //输出调用的文件名和文件行号 默认是false
+	// logs.EnableFuncCallDepth(true)
+	// //异步输出 设置缓冲chan 为2
+	// logs.Async(3)
+	// //多文件 debug  error  等分开写
 
-	configJSON, err1 := json.Marshal(config)
-	if err1 != nil {
-		err = err1
-		err = logs.SetLogger(logs.AdapterMultiFile, `{"filename":"longagent.log"}`)
-	} else {
-		err = logs.SetLogger(logs.AdapterMultiFile, string(configJSON))
-	}
+	// configJSON, err1 := json.Marshal(config)
+	// if err1 != nil {
+	// 	err = err1
+	// 	err = logs.SetLogger(logs.AdapterMultiFile, `{"filename":"longagent.log"}`)
+	// } else {
+	// 	err = logs.SetLogger(logs.AdapterMultiFile, string(configJSON))
+	// }
+
+	//现在为了调试方便使用 输出到终端
+	logs.SetLogger(logs.AdapterConsole)
+
 	return
 }
 
@@ -159,21 +155,21 @@ func initetcd(endpoint []string, key string) (result map[string]string, err erro
 	})
 	result = make(map[string]string, len(key))
 	if err != nil {
-		fmt.Println("clientv3.New err", err)
+		logs.Error("etcd clientv3.New err", err)
 	}
 	defer cli.Close()
-	fmt.Println("clientv3.New success")
+	logs.Debug("etcd clientv3.New success")
 
 	//获取key所对应的值
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	resp, err1 := cli.Get(ctx, key)
 	cancel()
 	if err1 != nil {
-		fmt.Println("cli.Get err", err1)
+		logs.Error("cli.Get err", err1)
 		err = err1
 	}
 	for _, ev := range resp.Kvs {
-		fmt.Printf("%s :%s\n", ev.Key, ev.Value)
+		logs.Debug("etcd get key=%s ,value=%s\n", ev.Key, ev.Value)
 		result[string(ev.Key)] = string(ev.Value)
 	}
 
