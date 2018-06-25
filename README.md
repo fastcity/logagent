@@ -10,3 +10,7 @@
  # etcdset
  设置etcd的key的路径的，类似于："D:\GoWork\test0.txt"
 
+#consumer
+1. 消费kafka的消息
+2. 发送到es
+3. 用kibana 进行消息展示
