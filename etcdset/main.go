@@ -4,7 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-
+	"math/rand"
+	"strconv"
 	"time"
 
 	"github.com/coreos/etcd/clientv3"
@@ -25,31 +26,35 @@ func main() {
 	}
 	defer cli.Close()
 
-	setkey := "/longagent/collect"
-
-	collect := collectionInfo{`D:\GoWork\testone.txt`, "path_topic"}
+	setkey := "/logagent/collect"
+	rand.Seed(time.Now().Unix())
+	name := rand.Intn(10)
+	path := `D:\GoWork\test` + strconv.Itoa(name) + `.txt`
+	fmt.Println("set path:", path)
+	//path = `D:\GoWork\testone.txt`
+	collect := collectionInfo{path, "path_topic"}
 	value := []collectionInfo{collect}
 
 	confjson, _ := json.Marshal(value)
 	put(cli, setkey, string(confjson))
 	get(cli, setkey)
 
-	fmt.Println("start update key after 10 second ....")
+	// fmt.Println("start update key after 10 second ....")
 
-	count := 10
-	for {
-		fmt.Println(count)
-		count--
-		time.Sleep(1 * time.Second)
-		if count == 0 {
-			break
-		}
-	}
+	// count := 10
+	// for {
+	// 	fmt.Println(count)
+	// 	count--
+	// 	time.Sleep(1 * time.Second)
+	// 	if count == 0 {
+	// 		break
+	// 	}
+	// }
 
-	collect = collectionInfo{`D:\GoWork\testtwo.txt`, "path_topic"}
-	value = []collectionInfo{collect}
-	confjson, _ = json.Marshal(value)
-	put(cli, setkey, string(confjson))
+	// collect = collectionInfo{`D:\GoWork\testtwo.txt`, "path_topic"}
+	// value = []collectionInfo{collect}
+	// confjson, _ = json.Marshal(value)
+	// put(cli, setkey, string(confjson))
 
 }
 
