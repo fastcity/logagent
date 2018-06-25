@@ -1,6 +1,7 @@
 # logagent
-日志收集
+日志收集系统
 
+# config
 1. 需要有配置文件，配置文件为logagent.ini
 2. 配置文件路径为生成的exe的路径+\config\logagent.ini
 # client
