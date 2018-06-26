@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	//"logCollection/logagent/tools"
 	"os"
 	"sync"
 	"time"
@@ -43,6 +42,7 @@ var (
 	AppConfig MyConfig
 	//CollectList 当前正在收集日志列表
 	CollectList []CollectionInfo
+	wg          sync.WaitGroup
 )
 
 func main() {
@@ -73,17 +73,18 @@ func main() {
 		endpoints := []string{AppConfig.kafkaAddr}
 		lines := make(chan *tail.Line)
 		for _, p := range CollectList {
+			wg.Add(1)
 			go readLog(lines, p)
 			// 读取出来，放到kafka上即可
 			go sendMsg(lines, p, endpoints)
 		}
 
 	}
-
-	for {
-		time.Sleep(10 * time.Second)
-		logs.Debug("i am main===========")
-	}
+	wg.Wait()
+	// for {
+	// 	time.Sleep(10 * time.Second)
+	// 	logs.Debug("i am main===========")
+	// }
 }
 
 //LoadConfig 加载配置文件
@@ -258,6 +259,7 @@ func updateKeys(result *map[string]string) {
 			for _, coll := range collectTemplist {
 				for _, call := range CollectList {
 					if coll.Path != call.Path {
+						wg.Add(1)
 						//停止该项
 						call.lock.Lock()
 						//这样更新是错误的，更新不了
@@ -370,6 +372,7 @@ func sendMsg(lines chan *tail.Line, collectionInfo CollectionInfo, endpoint []st
 			logs.Info("sendmsg to kafak success ,pid:%v, offset:%v", pid, offset)
 		} else {
 			logs.Error("check path:%s read chan is closed", collectionInfo.Path)
+			wg.Done()
 			return
 		}
 	}
