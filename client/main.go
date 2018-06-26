@@ -72,11 +72,18 @@ func main() {
 		//根据etcd读取配置文件 开始跟踪日志
 		endpoints := []string{AppConfig.kafkaAddr}
 		lines := make(chan *tail.Line)
-		for _, p := range CollectList {
+		// for _, p := range CollectList {
+		// 	wg.Add(1)
+		// 	go readLog(lines, &p)
+		// 	// 读取出来，放到kafka上即可
+		// 	go sendMsg(lines, &p, endpoints)
+		// }
+		for i := 0; i < len(CollectList); i++ {
+			logs.Debug("update keys before path%s addr is:%x", CollectList[i].Path, &CollectList[i])
 			wg.Add(1)
-			go readLog(lines, p)
+			go readLog(lines, &CollectList[i])
 			// 读取出来，放到kafka上即可
-			go sendMsg(lines, p, endpoints)
+			go sendMsg(lines, &CollectList[i], endpoints)
 		}
 
 	}
@@ -253,31 +260,30 @@ func updateKeys(result *map[string]string) {
 			err := json.Unmarshal([]byte(v), &collectTemplist)
 			if err != nil {
 				logs.Error("json Unmarshal etcdkeycollect err", err)
+				return
 			}
 			logs.Debug("update keys after json.Unmarshal collectTemplist:", collectTemplist)
-			//todo停止以前的
-			for _, coll := range collectTemplist {
-				for _, call := range CollectList {
-					if coll.Path != call.Path {
-						wg.Add(1)
-						//停止该项
-						call.lock.Lock()
-						//这样更新是错误的，更新不了
-						call.Path = coll.Path
-						call.Topic = coll.Topic
-						call.update = true
-						call.lock.Unlock()
-
-						lines := make(chan *tail.Line)
-						logs.Debug("start update new address ", coll.Path)
-						go readLog(lines, coll)
-						// 读取出来，放到kafka上即可
-						go sendMsg(lines, coll, endpoints)
-					} else {
-						logs.Debug("path is same ,noneed update", coll.Path)
-					}
-				}
+			//停止现有的
+			for i := 0; i < len(CollectList); i++ {
+				logs.Debug("update keys after path%s addr is:%x", CollectList[i].Path, &CollectList[i])
+				CollectList[i].lock.Lock()
+				CollectList[i].update = true
+				CollectList[i].lock.Unlock()
 			}
+			//清除CollectList
+			CollectList = append(CollectList, CollectList[:0]...)
+			logs.Debug("clear CollectList =======")
+			CollectList = collectTemplist
+			logs.Debug("new  CollectList =======:", CollectList)
+			for i := 0; i < len(CollectList); i++ {
+				wg.Add(1)
+				lines := make(chan *tail.Line)
+				logs.Debug("start update new address ", CollectList[i].Path)
+				go readLog(lines, &CollectList[i])
+				// 读取出来，放到kafka上即可
+				go sendMsg(lines, &CollectList[i], endpoints)
+			}
+
 			logs.Debug("update keys read send log CollectList:", CollectList)
 		} else {
 			//停止被删除路径的读取
@@ -288,8 +294,8 @@ func updateKeys(result *map[string]string) {
 }
 
 //读取相应路径下的日志
-func readLog(msgchan chan *tail.Line, collectionInfo CollectionInfo) {
-	logs.Debug("tail.TailFile init CollectionInfo:%v", collectionInfo)
+func readLog(msgchan chan *tail.Line, collectionInfo *CollectionInfo) {
+	logs.Debug("tail.TailFile init CollectionInfo:%v addr is %x", collectionInfo, collectionInfo)
 	tails, err := tail.TailFile(collectionInfo.Path, tail.Config{
 		ReOpen: true,
 		Follow: true,
@@ -309,6 +315,11 @@ func readLog(msgchan chan *tail.Line, collectionInfo CollectionInfo) {
 	)
 
 	for {
+		if collectionInfo == nil {
+			logs.Debug("check path:%s is update so return current  ", collectionInfo.Path)
+			close(msgchan)
+			return
+		}
 		collectionInfo.lock.RLock()
 		if collectionInfo.update {
 			collectionInfo.lock.RUnlock()
@@ -316,6 +327,8 @@ func readLog(msgchan chan *tail.Line, collectionInfo CollectionInfo) {
 			close(msgchan)
 			return
 		}
+
+		logs.Debug("check path:%s is update so return current  ", collectionInfo.Path)
 		logs.Info("============i am ready for read log of %s=========", collectionInfo.Path)
 
 		collectionInfo.lock.RUnlock()
@@ -330,7 +343,7 @@ func readLog(msgchan chan *tail.Line, collectionInfo CollectionInfo) {
 }
 
 //给kafka发送消息
-func sendMsg(lines chan *tail.Line, collectionInfo CollectionInfo, endpoint []string) {
+func sendMsg(lines chan *tail.Line, collectionInfo *CollectionInfo, endpoint []string) {
 
 	config := sarama.NewConfig()
 	//是否需要回复
