@@ -20,10 +20,9 @@ import (
 //CollectionInfo 需要收集日志的信息
 type CollectionInfo struct {
 	//tools.Slice
-	Path   string `json:"logpath"` //路径
-	Topic  string `json:"topic"`   //kakfa的topic名称
-	update bool   //地址是否变化
-	lock   sync.RWMutex
+	Path   string    `json:"logpath"` //路径
+	Topic  string    `json:"topic"`   //kakfa的topic名称
+	update chan bool //地址是否变化
 }
 
 //MyConfig 配置的结构体
@@ -66,32 +65,31 @@ func main() {
 		if err != nil {
 			logs.Error("json Unmarshal etcdkeycollect err:%v", err)
 		}
-
+		for i := 0; i < len(CollectList); i++ {
+			if CollectList[i].update == nil {
+				CollectList[i].update = make(chan bool)
+			}
+		}
 		logs.Debug("获取的配置信息：%v", AppConfig)
-		go watchetcdkey(endpointsetcd, AppConfig.etcdkeycollect)
+
 		//根据etcd读取配置文件 开始跟踪日志
 		endpoints := []string{AppConfig.kafkaAddr}
 		lines := make(chan *tail.Line)
-		// for _, p := range CollectList {
-		// 	wg.Add(1)
-		// 	go readLog(lines, &p)
-		// 	// 读取出来，放到kafka上即可
-		// 	go sendMsg(lines, &p, endpoints)
-		// }
 		for i := 0; i < len(CollectList); i++ {
 			logs.Debug("update keys before path%s addr is:%x", CollectList[i].Path, &CollectList[i])
-			wg.Add(1)
+			if CollectList[i].update == nil {
+				CollectList[i].update = make(chan bool)
+			}
+			wg.Add(2)
 			go readLog(lines, &CollectList[i])
 			// 读取出来，放到kafka上即可
 			go sendMsg(lines, &CollectList[i], endpoints)
 		}
-
+		wg.Add(1)
+		watchetcdkey(endpointsetcd, AppConfig.etcdkeycollect)
 	}
+
 	wg.Wait()
-	// for {
-	// 	time.Sleep(10 * time.Second)
-	// 	logs.Debug("i am main===========")
-	// }
 }
 
 //LoadConfig 加载配置文件
@@ -195,6 +193,7 @@ func initetcd(endpoint []string, key string) (result map[string]string, err erro
 
 //获取kafka 跟日志路径后 并检测其变化
 func watchetcdkey(endpoint []string, key string) {
+	//defer wg.Done()
 	fmt.Println("watchetcdkey keys", key)
 	result := make(map[string]string, len(key))
 	cli, err := clientv3.New(clientv3.Config{
@@ -266,13 +265,16 @@ func updateKeys(result *map[string]string) {
 			//停止现有的
 			for i := 0; i < len(CollectList); i++ {
 				logs.Debug("stop current goroutine path :%s", CollectList[i].Path)
-				CollectList[i].update = true
+				CollectList[i].update <- true
 			}
 			//清除CollectList
 			CollectList = append(CollectList, CollectList[:0]...)
 			CollectList = collectTemplist
 			logs.Debug("new  CollectList =======:", CollectList)
 			for i := 0; i < len(CollectList); i++ {
+				if CollectList[i].update == nil {
+					CollectList[i].update = make(chan bool)
+				}
 				wg.Add(1)
 				lines := make(chan *tail.Line)
 				logs.Debug("start update new address ", CollectList[i].Path)
@@ -307,89 +309,34 @@ func readLog(msgchan chan *tail.Line, collectionInfo *CollectionInfo) {
 	}
 	logs.Debug("tail.TailFile init success")
 	var (
-	// msg *tail.Line
-	// ok  bool
+		msg *tail.Line
+		ok  bool
 	)
 
 	defer close(msgchan)
 	for {
-		//	logs.Info("============i am ready for read log of %s=========", collectionInfo.Path)
-		// select {
-		// case msg := <-tails.Lines:
-		// 	if len(msg.Text) != 0 {
-		// 		msgchan <- msg
-		// 		logs.Debug("read log,msg len is: %d  ----- info is：%s\n", len(msg.Text), msg.Text)
-		// 	}
-		// case up := <-collectionInfo.update:
-		// 	if up {
-		// 		close(msgchan)
-		// 		logs.Debug("check path:%s is update so return current  ", collectionInfo.Path)
-		// 		return
-		// 	}
-		// 	//default:
-		// 	//logs.Info("============read log chan is block path is %s=========", collectionInfo.Path)
-		// }
-		// if checklogpathstatus(collectionInfo) {
-		// 	close(msgchan)
-		// }
-		if collectionInfo == nil {
-			logs.Debug("--------------check path:%s is update so return current---------  ", collectionInfo.Path)
-			return
-		}
-		collectionInfo.lock.RLock()
-		if collectionInfo.update {
-			collectionInfo.lock.RUnlock()
-			logs.Debug("check path:%s is update so return current  ", collectionInfo.Path)
-			return
-		}
-		//logs.Info("============i am ready for read log of %s=========", collectionInfo.Path)
-		collectionInfo.lock.RUnlock()
-
 		select {
-		case msg := <-tails.Lines:
+		case msg = <-tails.Lines:
+			logs.Info("============i am ready for read log of %s=========", collectionInfo.Path)
 			if len(msg.Text) != 0 {
 				msgchan <- msg
 				logs.Debug("read log,msg len is: %d  ----- info is：%s\n", len(msg.Text), msg.Text)
 			}
-		default:
-			// if checklogpathstatus(collectionInfo) {
-			// 	close(msgchan)
-			// }
-			if collectionInfo == nil {
-				logs.Debug("--------------check path:%s is update so return current---------  ", collectionInfo.Path)
-				return
-			}
-			collectionInfo.lock.RLock()
-			if collectionInfo.update {
-				collectionInfo.lock.RUnlock()
+		case ok = <-collectionInfo.update:
+			if ok {
+				//close(msgchan)
 				logs.Debug("check path:%s is update so return current  ", collectionInfo.Path)
 				return
 			}
-			//logs.Info("============i am ready for read log of %s=========", collectionInfo.Path)
-			collectionInfo.lock.RUnlock()
+		default:
+			//logs.Info("============read log chan is block path is %s=========", collectionInfo.Path)
 		}
-
 	}
-}
-func checklogpathstatus(collectionInfo *CollectionInfo) (b bool) {
-	if collectionInfo == nil {
-		logs.Debug("--------------check path:%s is update so return current---------  ", collectionInfo.Path)
-		b = true
-	}
-	collectionInfo.lock.RLock()
-	if collectionInfo.update {
-		collectionInfo.lock.RUnlock()
-		logs.Debug("check path:%s is update so return current  ", collectionInfo.Path)
-		b = true
-	}
-	//logs.Info("============i am ready for read log of %s=========", collectionInfo.Path)
-	collectionInfo.lock.RUnlock()
-	return
 }
 
 //给kafka发送消息
 func sendMsg(lines chan *tail.Line, collectionInfo *CollectionInfo, endpoint []string) {
-
+	defer wg.Done()
 	config := sarama.NewConfig()
 	//是否需要回复
 	config.Producer.RequiredAcks = sarama.WaitForAll
@@ -430,7 +377,7 @@ func sendMsg(lines chan *tail.Line, collectionInfo *CollectionInfo, endpoint []s
 			logs.Info("sendmsg to kafak success ,pid:%v, offset:%v", pid, offset)
 		} else {
 			logs.Error("check path:%s read chan is closed", collectionInfo.Path)
-			wg.Done()
+
 			return
 		}
 	}
