@@ -5,6 +5,7 @@
 ![结构图](https://raw.githubusercontent.com/AITown/logagent/master/structure/structure01.png)
 1. 需要有配置文件，配置文件为logagent.ini
 2. 配置文件路径为生成的exe的路径+\config\logagent.ini
+3. 下来配置文件将利用web端进行配置,mysql进行存储(尚未完成)
 # client
 客户端
 # config
